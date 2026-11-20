@@ -1,0 +1,81 @@
+name: Build Android APK
+
+# Starts by itself when you upload a .zip file to this repository,
+# and also when you press "Run workflow" on the Actions tab.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**.zip'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the repository files
+        uses: actions/checkout@v4
+
+      - name: Find the zip you uploaded and open it
+        shell: bash
+        run: |
+          ZIP="$(find . -maxdepth 3 -type f -iname '*.zip' -not -path './node_modules/*' | head -n 1)"
+          if [ -z "$ZIP" ]; then
+            echo "::error::No .zip file was found in this repository. Upload the app zip first."
+            exit 1
+          fi
+          echo "Using zip: $ZIP"
+          mkdir -p "$RUNNER_TEMP/unzipped"
+          unzip -q -o "$ZIP" -d "$RUNNER_TEMP/unzipped"
+          CONFIG="$(find "$RUNNER_TEMP/unzipped" -name capacitor.config.json -not -path '*/node_modules/*' | head -n 1)"
+          if [ -z "$CONFIG" ]; then
+            echo "::error::The zip does not contain capacitor.config.json. Upload the Question Converter app zip."
+            exit 1
+          fi
+          cp -r "$(dirname "$CONFIG")" "$RUNNER_TEMP/app"
+          if [ ! -f "$RUNNER_TEMP/app/www/index.html" ]; then
+            echo "::error::The zip has no www/index.html page inside."
+            exit 1
+          fi
+          echo "APP_DIR=$RUNNER_TEMP/app" >> "$GITHUB_ENV"
+          ls -la "$RUNNER_TEMP/app"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android tools
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;34.0.0"
+
+      - name: Install the app tools
+        working-directory: ${{ env.APP_DIR }}
+        run: npm install
+
+      - name: Create the Android project
+        working-directory: ${{ env.APP_DIR }}
+        run: npx cap add android
+
+      - name: Copy the app page into Android
+        working-directory: ${{ env.APP_DIR }}
+        run: npx cap sync android
+
+      - name: Build the APK
+        working-directory: ${{ env.APP_DIR }}/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Keep the APK so you can download it
+        uses: actions/upload-artifact@v4
+        with:
+          name: Question-Converter-APK
+          path: ${{ env.APP_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
